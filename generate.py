@@ -10,6 +10,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import matplotlib.pyplot as plt
+import pandas as pd  # Added for CSV handling
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -25,11 +26,12 @@ train_img_dir = os.path.join(base_dir, 'train')
 val_img_dir = os.path.join(base_dir, 'val')
 test_img_dir = os.path.join(base_dir, 'test')
 
-# Create aug directory structure
+# Create aug directory structure, including logs for losses
 os.makedirs(os.path.join(aug_dir, 'annotations'), exist_ok=True)
 os.makedirs(os.path.join(aug_dir, 'train'), exist_ok=True)
 os.makedirs(os.path.join(aug_dir, 'val'), exist_ok=True)
 os.makedirs(os.path.join(aug_dir, 'test'), exist_ok=True)
+os.makedirs(os.path.join(aug_dir, 'logs'), exist_ok=True)  # New logs directory
 
 # Copy original images and annotations to aug/
 shutil.copytree(train_img_dir, os.path.join(aug_dir, 'train'), dirs_exist_ok=True)
@@ -83,9 +85,9 @@ class DefectDataset(Dataset):
 
 # Image transformations
 transform = transforms.Compose([
-    transforms.Resize((224, 224)), 
+    transforms.Resize((64, 64)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5], [0.5])  # Normalize to [-1, 1]
+    transforms.Normalize([0.5], [0.5])
 ])
 
 # DCGAN Generator
@@ -135,16 +137,49 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return self.main(x).view(-1)
 
-# Training DCGAN for a specific class
-def train_dcgan(generator, discriminator, dataloader, num_epochs=50, latent_dim=100, device='cuda'):
+# New: Function to save losses to CSV
+def save_losses_to_csv(g_losses, d_losses, class_name, save_dir):
+    df = pd.DataFrame({
+        'Epoch': range(1, len(g_losses) + 1),
+        'Generator_Loss': g_losses,
+        'Discriminator_Loss': d_losses
+    })
+    csv_path = os.path.join(save_dir, f'losses_class_{class_name}.csv')
+    df.to_csv(csv_path, index=False)
+    print(f"Saved losses to {csv_path}")
+
+# New: Function to plot and save losses
+def plot_and_save_losses(g_losses, d_losses, class_name, save_dir):
+    plt.figure(figsize=(10, 5))
+    plt.plot(g_losses, label='Generator Loss')
+    plt.plot(d_losses, label='Discriminator Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Loss Curves for Class {class_name}')
+    plt.legend()
+    plt.grid(True)
+    plot_path = os.path.join(save_dir, f'loss_plot_class_{class_name}.png')
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Saved loss plot to {plot_path}")
+
+# Modified: Training DCGAN with loss tracking
+def train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=50, latent_dim=100, device='cuda'):
     criterion = nn.BCELoss()
     g_optimizer = optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
     d_optimizer = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+    g_losses = []
+    d_losses = []
 
     generator.train()
     discriminator.train()
 
     for epoch in range(num_epochs):
+        epoch_g_loss = 0.0
+        epoch_d_loss = 0.0
+        num_batches = 0
+
         for real_imgs, _ in dataloader:
             batch_size = real_imgs.size(0)
             real_imgs = real_imgs.to(device)
@@ -171,7 +206,22 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=50, latent_dim=
             g_loss.backward()
             g_optimizer.step()
 
-        print(f'Epoch [{epoch+1}/{num_epochs}] D Loss: {d_loss.item():.4f}, G Loss: {g_loss.item():.4f}')
+            epoch_g_loss += g_loss.item()
+            epoch_d_loss += d_loss.item()
+            num_batches += 1
+
+        # Average losses for the epoch
+        epoch_g_loss /= num_batches
+        epoch_d_loss /= num_batches
+        g_losses.append(epoch_g_loss)
+        d_losses.append(epoch_d_loss)
+
+        print(f'Epoch [{epoch+1}/{num_epochs}] D Loss: {epoch_d_loss:.4f}, G Loss: {epoch_g_loss:.4f}')
+
+    # Save losses to CSV
+    save_losses_to_csv(g_losses, d_losses, class_name, os.path.join(aug_dir, 'logs'))
+    # Plot and save losses
+    plot_and_save_losses(g_losses, d_losses, class_name, os.path.join(aug_dir, 'logs'))
 
     return generator
 
@@ -203,11 +253,12 @@ for cat_id, num_to_gen in to_generate.items():
     class_annotations = [ann for ann in annotations if ann['category_id'] == cat_id]
     dataset = DefectDataset(images, class_annotations, train_img_dir, transform=transform)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-    print("Start training class: ", cat_id)
+
     # Initialize and train DCGAN
+    class_name = cat_id_to_name[cat_id]
     generator = Generator(latent_dim=latent_dim).to(device)
     discriminator = Discriminator().to(device)
-    generator = train_dcgan(generator, discriminator, dataloader, num_epochs=50, latent_dim=latent_dim, device=device)
+    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=50, latent_dim=latent_dim, device=device)
 
     # Generate synthetic images
     fake_imgs = generate_images(generator, num_to_gen, latent_dim=latent_dim, device=device)
