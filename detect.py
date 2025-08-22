@@ -25,7 +25,7 @@ class CustomImageDataset(Dataset):
         self.annotations = self.data['annotations']
         # Map category_id to 0-6 (7 classes)
         self.category_map = {cat['id']: i for i, cat in enumerate(self.data['categories'][:7])}
-        # Category names for confusion matrix
+        # Category names for confusion matrix and metrics
         self.category_names = [cat['name'] for cat in self.data['categories'][:7]]
 
     def __len__(self):
@@ -72,17 +72,22 @@ def evaluate_model(model, test_loader, device, output_dir, category_names):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
     
-    # Compute metrics
+    # Compute metrics for all 7 classes, even if some are missing
+    precision, recall, f1, support = precision_recall_fscore_support(
+        all_labels, all_preds, labels=range(len(category_names)), average=None, zero_division=0
+    )
+    macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
+        all_labels, all_preds, average='macro', zero_division=0
+    )
     accuracy = accuracy_score(all_labels, all_preds)
-    precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average=None)
-    macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='macro')
     
     # Save metrics to CSV
     metrics_df = pd.DataFrame({
         'Class': category_names + ['Macro Average'],
         'Precision': list(precision) + [macro_precision],
         'Recall': list(recall) + [macro_recall],
-        'F1-Score': list(f1) + [macro_f1]
+        'F1-Score': list(f1) + [macro_f1],
+        'Support': list(support) + [None]  # Support is not defined for macro average
     })
     metrics_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
     
@@ -91,7 +96,7 @@ def evaluate_model(model, test_loader, device, output_dir, category_names):
         f.write(f"Accuracy: {accuracy:.4f}\n")
     
     # Compute and save confusion matrix
-    cm = confusion_matrix(all_labels, all_preds)
+    cm = confusion_matrix(all_labels, all_preds, labels=range(len(category_names)))
     cm_df = pd.DataFrame(cm, index=category_names, columns=category_names)
     cm_df.to_csv(os.path.join(output_dir, 'confusion_matrix.csv'))
     
@@ -205,7 +210,7 @@ def main(dataset_folder):
         
         # Train model
         print(f"Training {model_name}...")
-        trained_model = train_model(model, train_loader, val_loader, num_epochs=10, device=device, output_dir=output_dir)
+        trained_model = train_model(model, train_loader, val_loader, num_epochs=1, device=device, output_dir=output_dir)
         
         # Save model
         torch.save(trained_model.state_dict(), os.path.join(output_dir, 'model.pth'))
