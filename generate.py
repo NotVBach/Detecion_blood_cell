@@ -164,7 +164,7 @@ def plot_and_save_losses(g_losses, d_losses, class_name, save_dir):
     print(f"Saved loss plot to {plot_path}")
 
 # Modified: Training DCGAN with loss tracking
-def train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=50, latent_dim=100, device='cuda'):
+def train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=150, latent_dim=100, device='cuda'):
     criterion = nn.BCELoss()
     g_optimizer = optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
     d_optimizer = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -258,7 +258,7 @@ for cat_id, num_to_gen in to_generate.items():
     class_name = cat_id_to_name[cat_id]
     generator = Generator(latent_dim=latent_dim).to(device)
     discriminator = Discriminator().to(device)
-    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=50, latent_dim=latent_dim, device=device)
+    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=150, latent_dim=latent_dim, device=device)
 
     # Generate synthetic images
     fake_imgs = generate_images(generator, num_to_gen, latent_dim=latent_dim, device=device)
