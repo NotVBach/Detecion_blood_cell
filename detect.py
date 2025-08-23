@@ -210,7 +210,7 @@ def main(dataset_folder):
         
         # Train model
         print(f"Training {model_name}...")
-        trained_model = train_model(model, train_loader, val_loader, num_epochs=1, device=device, output_dir=output_dir)
+        trained_model = train_model(model, train_loader, val_loader, num_epochs=50, device=device, output_dir=output_dir)
         
         # Save model
         torch.save(trained_model.state_dict(), os.path.join(output_dir, 'model.pth'))
