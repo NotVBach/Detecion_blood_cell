@@ -4,66 +4,119 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torchvision import models, transforms
-from torchvision.models import VGG16_Weights, ResNet50_Weights
+from torchvision import transforms, models
 from PIL import Image
-import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, accuracy_score
-import numpy as np
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+from tqdm import tqdm
 import argparse
+import numpy as np
 
 # Custom Dataset Class
-class CustomImageDataset(Dataset):
-    def __init__(self, json_file, image_dir, transform=None):
-        with open(json_file) as f:
-            self.data = json.load(f)
-        self.image_dir = image_dir
+class DefectDataset(Dataset):
+    def __init__(self, root_dir, annotation_file, transform=None):
+        self.root_dir = root_dir
         self.transform = transform
-        self.images = self.data['images']
+        with open(annotation_file) as f:
+            self.data = json.load(f)
+        self.images = {img['id']: img for img in self.data['images']}
         self.annotations = self.data['annotations']
-        # Map category_id to 0-6 (7 classes)
-        self.category_map = {cat['id']: i for i, cat in enumerate(self.data['categories'][:7])}
-        # Category names for confusion matrix and metrics
-        self.category_names = [cat['name'] for cat in self.data['categories'][:7]]
+        # Map image_id to the first annotation's category_id (assuming one label per image)
+        self.image_to_label = {}
+        for ann in self.annotations:
+            image_id = ann['image_id']
+            if image_id not in self.image_to_label:  # Take first annotation
+                self.image_to_label[image_id] = ann['category_id'] - 1  # Adjust to 0-based indexing
+        self.image_ids = list(self.image_to_label.keys())
 
     def __len__(self):
-        return len(self.images)
+        return len(self.image_ids)
 
     def __getitem__(self, idx):
-        img_info = self.images[idx]
-        img_path = os.path.join(self.image_dir, img_info['file_name'])
+        image_id = self.image_ids[idx]
+        img_info = self.images[image_id]
+        img_path = os.path.join(self.root_dir, img_info['file_name'])
         image = Image.open(img_path).convert('RGB')
-        
-        # Get the first annotation for this image (assuming one label per image)
-        image_id = img_info['id']
-        annotation = next((ann for ann in self.annotations if ann['image_id'] == image_id), None)
-        label = self.category_map[annotation['category_id']] if annotation else 0  # Default to 0 if no annotation
+        label = self.image_to_label[image_id]
 
         if self.transform:
             image = self.transform(image)
         return image, label
 
-# Plot and Save Loss
-def plot_loss(train_losses, val_losses, output_dir, model_name):
-    plt.figure(figsize=(10, 5))
-    plt.plot(range(1, len(train_losses) + 1), train_losses, label='Train Loss')
-    plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
+# Function to initialize model
+def initialize_model(model_name, num_classes=7):
+    if model_name.lower() == 'vgg':
+        model = models.vgg16(weights='IMAGENET1K_V1')
+        model.classifier[6] = nn.Linear(4096, num_classes)
+    elif model_name.lower() == 'resnet':
+        model = models.resnet50(weights='IMAGENET1K_V2')
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    else:
+        raise ValueError("Model must be 'vgg' or 'resnet'")
+    return model
+
+# Training function
+def train_model(model, train_loader, val_loader, device, model_name, output_dir, epochs=50):
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+
+    train_losses, val_losses = [], []
+    best_val_loss = float('inf')
+
+    for epoch in range(epochs):
+        # Training
+        model.train()
+        train_loss = 0
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+        train_loss /= len(train_loader)
+        train_losses.append(train_loss)
+
+        # Validation
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+            val_loss /= len(val_loader)
+            val_losses.append(val_loss)
+
+        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        scheduler.step()
+
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), os.path.join(output_dir, f'{model_name}_best.pth'))
+
+    # Plot and save loss
+    plt.figure()
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title(f'{model_name} Loss Curve')
     plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(output_dir, 'loss_plot.png'))
+    plt.savefig(os.path.join(output_dir, f'{model_name}_loss_plot.png'))
     plt.close()
 
-# Evaluate Model and Save Metrics
-def evaluate_model(model, test_loader, device, output_dir, category_names):
+    return train_losses, val_losses
+
+# Evaluation function
+def evaluate_model(model, test_loader, device, model_name, output_dir, class_names):
     model.eval()
-    all_preds = []
-    all_labels = []
-    
+    all_preds, all_labels = [], []
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
@@ -71,159 +124,91 @@ def evaluate_model(model, test_loader, device, output_dir, category_names):
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-    
-    # Compute metrics for all 7 classes, even if some are missing
-    precision, recall, f1, support = precision_recall_fscore_support(
-        all_labels, all_preds, labels=range(len(category_names)), average=None, zero_division=0
-    )
-    macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
-        all_labels, all_preds, average='macro', zero_division=0
-    )
+
+    # Calculate metrics
     accuracy = accuracy_score(all_labels, all_preds)
-    
-    # Save metrics to CSV
-    metrics_df = pd.DataFrame({
-        'Class': category_names + ['Macro Average'],
-        'Precision': list(precision) + [macro_precision],
-        'Recall': list(recall) + [macro_recall],
-        'F1-Score': list(f1) + [macro_f1],
-        'Support': list(support) + [None]  # Support is not defined for macro average
-    })
-    metrics_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
-    
-    # Save accuracy separately
-    with open(os.path.join(output_dir, 'accuracy.txt'), 'w') as f:
+    precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='weighted')
+
+    # Save metrics
+    with open(os.path.join(output_dir, f'{model_name}_metrics.txt'), 'w') as f:
         f.write(f"Accuracy: {accuracy:.4f}\n")
-    
-    # Compute and save confusion matrix
-    cm = confusion_matrix(all_labels, all_preds, labels=range(len(category_names)))
-    cm_df = pd.DataFrame(cm, index=category_names, columns=category_names)
-    cm_df.to_csv(os.path.join(output_dir, 'confusion_matrix.csv'))
-    
-    # Plot confusion matrix
+        f.write(f"Precision: {precision:.4f}\n")
+        f.write(f"Recall: {recall:.4f}\n")
+        f.write(f"F1 Score: {f1:.4f}\n")
+
+    # Confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=category_names, yticklabels=category_names)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
     plt.xlabel('Predicted')
     plt.ylabel('True')
-    plt.title('Confusion Matrix')
-    plt.savefig(os.path.join(output_dir, 'confusion_matrix.png'))
+    plt.title(f'{model_name} Confusion Matrix')
+    plt.savefig(os.path.join(output_dir, f'{model_name}_confusion_matrix.png'))
     plt.close()
 
-# Training Function
-def train_model(model, train_loader, val_loader, num_epochs, device, output_dir):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    
-    train_losses, val_losses = [], []
-    
-    for epoch in range(num_epochs):
-        # Training
-        model.train()
-        running_loss = 0.0
-        for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item() * images.size(0)
-        
-        epoch_train_loss = running_loss / len(train_loader.dataset)
-        train_losses.append(epoch_train_loss)
-        
-        # Validation
-        model.eval()
-        running_loss = 0.0
-        with torch.no_grad():
-            for images, labels in val_loader:
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                running_loss += loss.item() * images.size(0)
-        
-        epoch_val_loss = running_loss / len(val_loader.dataset)
-        val_losses.append(epoch_val_loss)
-        
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
-    
-    # Save loss to CSV
-    loss_df = pd.DataFrame({'Epoch': range(1, num_epochs+1), 'Train_Loss': train_losses, 'Val_Loss': val_losses})
-    loss_df.to_csv(os.path.join(output_dir, 'loss.csv'), index=False)
-    
-    # Plot and save loss
-    plot_loss(train_losses, val_losses, output_dir, model.__class__.__name__)
-    
-    return model
+    return accuracy, precision, recall, f1
 
-# Main Function
-def main(dataset_folder):
-    # Device configuration
+# Main function
+def main():
+    parser = argparse.ArgumentParser(description="Train VGG or ResNet on defect dataset")
+    parser.add_argument('--dataset_folder', type=str, default='noaug', help='Path to dataset folder')
+    args = parser.parse_args()
+
+    dataset_folder = args.dataset_folder
+    output_base = 'output'
+    os.makedirs(output_base, exist_ok=True)
+    output_dir = os.path.join(output_base, os.path.basename(dataset_folder))
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+
     # Data transforms
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-    
+
     # Load datasets
-    train_dataset = CustomImageDataset(
-        json_file=os.path.join(dataset_folder, 'annotations', 'train.json'),
-        image_dir=os.path.join(dataset_folder, 'train'),
+    train_dataset = DefectDataset(
+        os.path.join(dataset_folder, 'train'),
+        os.path.join(dataset_folder, 'annotations', 'train.json'),
         transform=transform
     )
-    val_dataset = CustomImageDataset(
-        json_file=os.path.join(dataset_folder, 'annotations', 'val.json'),
-        image_dir=os.path.join(dataset_folder, 'val'),
+    val_dataset = DefectDataset(
+        os.path.join(dataset_folder, 'val'),
+        os.path.join(dataset_folder, 'annotations', 'val.json'),
         transform=transform
     )
-    test_dataset = CustomImageDataset(
-        json_file=os.path.join(dataset_folder, 'annotations', 'test.json'),
-        image_dir=os.path.join(dataset_folder, 'test'),
+    test_dataset = DefectDataset(
+        os.path.join(dataset_folder, 'test'),
+        os.path.join(dataset_folder, 'annotations', 'test.json'),
         transform=transform
     )
-    
+
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-    
-    # Initialize models
-    models_dict = {
-        'vgg16': models.vgg16(weights=VGG16_Weights.IMAGENET1K_V1),
-        'resnet50': models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
-    }
-    
-    # Modify models for 7-class classification and evaluate
-    for model_name, model in models_dict.items():
-        if model_name == 'vgg16':
-            model.classifier[6] = nn.Linear(4096, 7)
-        elif model_name == 'resnet50':
-            model.fc = nn.Linear(model.fc.in_features, 7)
-        
-        model = model.to(device)
-        
-        # Create output directory
-        output_dir = os.path.join('output', os.path.basename(dataset_folder), model_name)
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Train model
-        print(f"Training {model_name}...")
-        trained_model = train_model(model, train_loader, val_loader, num_epochs=50, device=device, output_dir=output_dir)
-        
-        # Save model
-        torch.save(trained_model.state_dict(), os.path.join(output_dir, 'model.pth'))
-        
-        # Evaluate model
-        print(f"Evaluating {model_name}...")
-        evaluate_model(trained_model, test_loader, device, output_dir, test_dataset.category_names)
-    
-    print(f"Training and evaluation complete. Results saved in {os.path.join('output', os.path.basename(dataset_folder))}")
+    val_loader = DataLoader(val_dataset, batch_size=32)
+    test_loader = DataLoader(test_dataset, batch_size=32)
+
+    # Class names (7 classes, ignoring 'platelet')
+    class_names = ['ba', 'eo', 'erb', 'ig', 'lym', 'mono', 'neut']
+
+    # Train and evaluate VGG
+    vgg_output_dir = os.path.join(output_dir, 'vgg')
+    os.makedirs(vgg_output_dir, exist_ok=True)
+    vgg_model = initialize_model('vgg', num_classes=7).to(device)
+    train_losses, val_losses = train_model(vgg_model, train_loader, val_loader, device, 'vgg', vgg_output_dir)
+    accuracy, precision, recall, f1 = evaluate_model(vgg_model, test_loader, device, 'vgg', vgg_output_dir, class_names)
+    print(f"VGG - Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
+    # Train and evaluate ResNet
+    resnet_output_dir = os.path.join(output_dir, 'resnet')
+    os.makedirs(resnet_output_dir, exist_ok=True)
+    resnet_model = initialize_model('resnet', num_classes=7).to(device)
+    train_losses, val_losses = train_model(resnet_model, train_loader, val_loader, device, 'resnet', resnet_output_dir)
+    accuracy, precision, recall, f1 = evaluate_model(resnet_model, test_loader, device, 'resnet', resnet_output_dir, class_names)
+    print(f"ResNet - Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train VGG and ResNet on custom dataset')
-    parser.add_argument('--dataset_folder', type=str, default='noaug', help='Path to dataset folder')
-    args = parser.parse_args()
-    
-    main(args.dataset_folder)
+    main()
