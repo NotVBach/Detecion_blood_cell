@@ -63,7 +63,7 @@ def initialize_model(model_name, num_classes=7):
         raise ValueError("Model must be 'vgg', 'resnet', or 'inception'")
 
 # Training function
-def train_model(model, train_loader, val_loader, device, model_name, output_dir, input_size, epochs=10):
+def train_model(model, train_loader, val_loader, device, model_name, output_dir, input_size, epochs=30):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
@@ -186,7 +186,7 @@ def main():
     for model_name in model_list:
         # Model-specific input size
         model, input_size = initialize_model(model_name, num_classes=7)
-        # input_size = 64
+
         model = model.to(device)
 
         # Data transforms
