@@ -24,12 +24,12 @@ args = {
     'sigma': 1.0,         # Variance in latent space
     'lambda': 0.01,       # Discriminator loss weight
     'lr': 0.0002,         # Learning rate
-    'epochs': 300,         # Number of training epochs
-    'batch_size': 32,     # Reduced batch size for 224x224 images
+    'epochs': 50,         # Number of training epochs
+    'batch_size': 200,    # Batch size
     'save': True,         # Save model weights
     'train': True,        # Train the model
     'dataset': 'custom',  # Custom dataset
-    'image_size': 224     # Target image size for resizing (changed to 224)
+    'image_size': 128     # Target image size for resizing
 }
 
 # Define Encoder
@@ -41,22 +41,19 @@ class Encoder(nn.Module):
         self.n_z = args['n_z']
         
         self.conv = nn.Sequential(
-            nn.Conv2d(self.n_channel, self.dim_h, 4, 2, 1, bias=False),      # 224x224 -> 112x112
+            nn.Conv2d(self.n_channel, self.dim_h, 4, 2, 1, bias=False),      # 128x128 -> 64x64
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h, self.dim_h * 2, 4, 2, 1, bias=False),      # 112x112 -> 56x56
+            nn.Conv2d(self.dim_h, self.dim_h * 2, 4, 2, 1, bias=False),      # 64x64 -> 32x32
             nn.BatchNorm2d(self.dim_h * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h * 2, self.dim_h * 4, 4, 2, 1, bias=False),  # 56x56 -> 28x28
+            nn.Conv2d(self.dim_h * 2, self.dim_h * 4, 4, 2, 1, bias=False),  # 32x32 -> 16x16
             nn.BatchNorm2d(self.dim_h * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h * 4, self.dim_h * 8, 4, 2, 1, bias=False),  # 28x28 -> 14x14
-            nn.BatchNorm2d(self.dim_h * 8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h * 8, self.dim_h * 8, 4, 2, 1, bias=False),  # 14x14 -> 7x7
+            nn.Conv2d(self.dim_h * 4, self.dim_h * 8, 4, 2, 1, bias=False),  # 16x16 -> 8x8
             nn.BatchNorm2d(self.dim_h * 8),
             nn.LeakyReLU(0.2, inplace=True)
         )
-        self.fc = nn.Linear(self.dim_h * 8 * 7 * 7, self.n_z)  # For 224x224 input
+        self.fc = nn.Linear(self.dim_h * 8 * 8 * 8, self.n_z)  # For 128x128 input (8x8 feature map)
 
     def forward(self, x):
         x = self.conv(x)
@@ -73,29 +70,26 @@ class Decoder(nn.Module):
         self.n_z = args['n_z']
         
         self.fc = nn.Sequential(
-            nn.Linear(self.n_z, self.dim_h * 8 * 7 * 7),  # Start with 7x7 feature map
+            nn.Linear(self.n_z, self.dim_h * 8 * 8 * 8),  # Start with 8x8 feature map
             nn.ReLU()
         )
         self.deconv = nn.Sequential(
-            nn.ConvTranspose2d(self.dim_h * 8, self.dim_h * 8, 4, 2, 1, bias=False),  # 7x7 -> 14x14
-            nn.BatchNorm2d(self.dim_h * 8),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h * 8, self.dim_h * 4, 4, 2, 1, bias=False),  # 14x14 -> 28x28
+            nn.ConvTranspose2d(self.dim_h * 8, self.dim_h * 4, 4, 2, 1, bias=False),  # 8x8 -> 16x16
             nn.BatchNorm2d(self.dim_h * 4),
             nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h * 4, self.dim_h * 2, 4, 2, 1, bias=False),  # 28x28 -> 56x56
+            nn.ConvTranspose2d(self.dim_h * 4, self.dim_h * 2, 4, 2, 1, bias=False),  # 16x16 -> 32x32
             nn.BatchNorm2d(self.dim_h * 2),
             nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h * 2, self.dim_h, 4, 2, 1, bias=False),     # 56x56 -> 112x112
+            nn.ConvTranspose2d(self.dim_h * 2, self.dim_h, 4, 2, 1, bias=False),     # 32x32 -> 64x64
             nn.BatchNorm2d(self.dim_h),
             nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h, self.n_channel, 4, 2, 1, bias=False),     # 112x112 -> 224x224
+            nn.ConvTranspose2d(self.dim_h, self.n_channel, 4, 2, 1, bias=False),     # 64x64 -> 128x128
             nn.Tanh()
         )
 
     def forward(self, x):
         x = self.fc(x)
-        x = x.view(-1, self.dim_h * 8, 7, 7)  # Reshape to 7x7 feature map
+        x = x.view(-1, self.dim_h * 8, 8, 8)  # Reshape to 8x8 feature map
         x = self.deconv(x)
         return x
 
@@ -152,7 +146,7 @@ def load_images_and_labels(json_path, img_dir):
     img_data = []
     
     transform = transforms.Compose([
-        transforms.Resize((args['image_size'], args['image_size'])),  # Updated to 224x224
+        transforms.Resize((args['image_size'], args['image_size'])),  # Updated to 128x128
         transforms.ToTensor(),
         transforms.Normalize((0.5,) * args['n_channel'], (0.5,) * args['n_channel'])
     ])
@@ -216,7 +210,7 @@ if args['train']:
                               batch_size=args['batch_size'], shuffle=True)
     
     best_loss = np.inf
-    loss_history = []  # Store loss for each epoch
+    loss_history = []
     
     for epoch in range(args['epochs']):
         encoder.train()

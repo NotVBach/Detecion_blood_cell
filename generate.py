@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import matplotlib.pyplot as plt
-import pandas as pd  # Added for CSV handling
+import pandas as pd
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -31,7 +31,7 @@ os.makedirs(os.path.join(aug_dir, 'annotations'), exist_ok=True)
 os.makedirs(os.path.join(aug_dir, 'train'), exist_ok=True)
 os.makedirs(os.path.join(aug_dir, 'val'), exist_ok=True)
 os.makedirs(os.path.join(aug_dir, 'test'), exist_ok=True)
-os.makedirs(os.path.join(aug_dir, 'logs'), exist_ok=True)  # New logs directory
+os.makedirs(os.path.join(aug_dir, 'logs'), exist_ok=True)
 
 # Copy original images and annotations to aug/
 shutil.copytree(train_img_dir, os.path.join(aug_dir, 'train'), dirs_exist_ok=True)
@@ -83,67 +83,67 @@ class DefectDataset(Dataset):
         label = ann['category_id']
         return image, label
 
-# Image transformations
+# Image transformations (updated for 128x128)
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((128, 128)),
     transforms.ToTensor(),
     transforms.Normalize([0.5], [0.5])
 ])
 
-# DCGAN Generator
+# DCGAN Generator (updated for 128x128)
 class Generator(nn.Module):
     def __init__(self, latent_dim=100, feature_maps=64, channels=3):
         super(Generator, self).__init__()
         self.main = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, feature_maps * 8, 7, 1, 0, bias=False),  # Output: 7x7
+            nn.ConvTranspose2d(latent_dim, feature_maps * 16, 4, 1, 0, bias=False),  # 4x4
+            nn.BatchNorm2d(feature_maps * 16),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(feature_maps * 16, feature_maps * 8, 4, 2, 1, bias=False),  # 8x8
             nn.BatchNorm2d(feature_maps * 8),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps * 8, feature_maps * 4, 4, 2, 1, bias=False),  # Output: 14x14
+            nn.ConvTranspose2d(feature_maps * 8, feature_maps * 4, 4, 2, 1, bias=False),  # 16x16
             nn.BatchNorm2d(feature_maps * 4),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps * 4, feature_maps * 2, 4, 2, 1, bias=False),  # Output: 28x28
+            nn.ConvTranspose2d(feature_maps * 4, feature_maps * 2, 4, 2, 1, bias=False),  # 32x32
             nn.BatchNorm2d(feature_maps * 2),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps * 2, feature_maps, 4, 2, 1, bias=False),  # Output: 56x56
+            nn.ConvTranspose2d(feature_maps * 2, feature_maps, 4, 2, 1, bias=False),  # 64x64
             nn.BatchNorm2d(feature_maps),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps, feature_maps // 2, 4, 2, 1, bias=False),  # Output: 112x112
-            nn.BatchNorm2d(feature_maps // 2),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps // 2, channels, 4, 2, 1, bias=False),  # Output: 224x224
+            nn.ConvTranspose2d(feature_maps, channels, 4, 2, 1, bias=False),  # 128x128
             nn.Tanh()
         )
 
     def forward(self, x):
         return self.main(x)
 
-# DCGAN Discriminator
+# DCGAN Discriminator (updated for 128x128)
 class Discriminator(nn.Module):
     def __init__(self, feature_maps=64, channels=3):
         super(Discriminator, self).__init__()
         self.main = nn.Sequential(
-            nn.Conv2d(channels, feature_maps, 4, 2, 1, bias=False),  # Output: 112x112
+            nn.Conv2d(channels, feature_maps, 4, 2, 1, bias=False),  # 64x64
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps, feature_maps * 2, 4, 2, 1, bias=False),  # Output: 56x56
+            nn.Conv2d(feature_maps, feature_maps * 2, 4, 2, 1, bias=False),  # 32x32
             nn.BatchNorm2d(feature_maps * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 2, feature_maps * 4, 4, 2, 1, bias=False),  # Output: 28x28
+            nn.Conv2d(feature_maps * 2, feature_maps * 4, 4, 2, 1, bias=False),  # 16x16
             nn.BatchNorm2d(feature_maps * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 4, feature_maps * 8, 4, 2, 1, bias=False),  # Output: 14x14
+            nn.Conv2d(feature_maps * 4, feature_maps * 8, 4, 2, 1, bias=False),  # 8x8
             nn.BatchNorm2d(feature_maps * 8),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 8, feature_maps * 16, 4, 2, 1, bias=False),  # Output: 7x7
+            nn.Conv2d(feature_maps * 8, feature_maps * 16, 4, 2, 1, bias=False),  # 4x4
             nn.BatchNorm2d(feature_maps * 16),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 16, 1, 7, 1, 0, bias=False),  # Output: 1x1
+            nn.Conv2d(feature_maps * 16, 1, 4, 1, 0, bias=False),  # 1x1
             nn.Sigmoid()
         )
 
     def forward(self, x):
         return self.main(x).view(-1)
 
-# New: Function to save losses to CSV
+# Function to save losses to CSV
 def save_losses_to_csv(g_losses, d_losses, class_name, save_dir):
     df = pd.DataFrame({
         'Epoch': range(1, len(g_losses) + 1),
@@ -154,7 +154,7 @@ def save_losses_to_csv(g_losses, d_losses, class_name, save_dir):
     df.to_csv(csv_path, index=False)
     print(f"Saved losses to {csv_path}")
 
-# New: Function to plot and save losses
+# Function to plot and save losses
 def plot_and_save_losses(g_losses, d_losses, class_name, save_dir):
     plt.figure(figsize=(10, 5))
     plt.plot(g_losses, label='Generator Loss')
@@ -169,8 +169,8 @@ def plot_and_save_losses(g_losses, d_losses, class_name, save_dir):
     plt.close()
     print(f"Saved loss plot to {plot_path}")
 
-# Modified: Training DCGAN with loss tracking
-def train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=150, latent_dim=100, device='cuda'):
+# Training DCGAN with loss tracking
+def train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=200, latent_dim=100, device='cuda'):
     criterion = nn.BCELoss()
     g_optimizer = optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
     d_optimizer = optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -264,7 +264,7 @@ for cat_id, num_to_gen in to_generate.items():
     class_name = cat_id_to_name[cat_id]
     generator = Generator(latent_dim=latent_dim).to(device)
     discriminator = Discriminator().to(device)
-    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=300, latent_dim=latent_dim, device=device)
+    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=150, latent_dim=latent_dim, device=device)
 
     # Generate synthetic images
     fake_imgs = generate_images(generator, num_to_gen, latent_dim=latent_dim, device=device)
@@ -277,11 +277,11 @@ for cat_id, num_to_gen in to_generate.items():
         img_path = os.path.join(aug_dir, 'train', img_name)
         Image.fromarray(img_array).save(img_path)
 
-        # Update images list
+        # Update images list (updated for 128x128)
         new_images.append({
             'file_name': img_name,
-            'height': 224,
-            'width': 224,
+            'height': 128,
+            'width': 128,
             'id': max_image_id
         })
 
