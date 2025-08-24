@@ -11,6 +11,7 @@ import seaborn as sns
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from tqdm import tqdm
 import argparse
+import shutil
 import numpy as np
 import gc
 
@@ -20,6 +21,12 @@ def clear_cache():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
+    cache_dir = os.path.expanduser("~/.cache/torch/hub")
+    if os.path.exists(cache_dir):
+        print(f"Clearing cache directory: {cache_dir}")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    else:
+        print(f"Cache directory {cache_dir} does not exist, no need to clear.")
     print("Cache cleared.")
 
 # Custom Dataset Class
