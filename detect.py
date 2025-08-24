@@ -12,6 +12,15 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, con
 from tqdm import tqdm
 import argparse
 import numpy as np
+import gc
+
+# Function to clear cache
+def clear_cache():
+    """Clear PyTorch CUDA cache and Python garbage collector."""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+    print("Cache cleared.")
 
 # Custom Dataset Class
 class DefectDataset(Dataset):
@@ -63,7 +72,7 @@ def initialize_model(model_name, num_classes=7):
         raise ValueError("Model must be 'vgg', 'resnet', or 'inception'")
 
 # Training function
-def train_model(model, train_loader, val_loader, device, model_name, output_dir, input_size, epochs=30):
+def train_model(model, train_loader, val_loader, device, model_name, output_dir, input_size, epochs=10):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
@@ -184,9 +193,12 @@ def main():
     model_list = ['vgg', 'resnet', 'inception'] if args.models == 'all' else [args.models]
 
     for model_name in model_list:
+        print(f"\nStarting training for {model_name.capitalize()}...")
+        # Clear cache before training
+        clear_cache()
+
         # Model-specific input size
         model, input_size = initialize_model(model_name, num_classes=7)
-
         model = model.to(device)
 
         # Data transforms
@@ -223,6 +235,9 @@ def main():
         train_losses, val_losses = train_model(model, train_loader, val_loader, device, model_name, model_output_dir, input_size)
         accuracy, precision, recall, f1 = evaluate_model(model, test_loader, device, model_name, model_output_dir, class_names)
         print(f"{model_name.capitalize()} - Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
+        # Clear cache after training to free memory for the next model
+        clear_cache()
 
 if __name__ == '__main__':
     main()
