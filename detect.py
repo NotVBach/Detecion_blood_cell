@@ -49,15 +49,21 @@ def initialize_model(model_name, num_classes=7):
     if model_name.lower() == 'vgg':
         model = models.vgg16(weights='IMAGENET1K_V1')
         model.classifier[6] = nn.Linear(4096, num_classes)
+        return model, 224  # Input size for VGG
     elif model_name.lower() == 'resnet':
         model = models.resnet50(weights='IMAGENET1K_V2')
         model.fc = nn.Linear(model.fc.in_features, num_classes)
+        return model, 224  # Input size for ResNet
+    elif model_name.lower() == 'inception':
+        model = models.inception_v3(weights='IMAGENET1K_V1')
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        model.aux_logits = True  # Enable auxiliary logits for training
+        return model, 299  # Input size for Inception
     else:
-        raise ValueError("Model must be 'vgg' or 'resnet'")
-    return model
+        raise ValueError("Model must be 'vgg', 'resnet', or 'inception'")
 
 # Training function
-def train_model(model, train_loader, val_loader, device, model_name, output_dir, epochs=50):
+def train_model(model, train_loader, val_loader, device, model_name, output_dir, input_size, epochs=10):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
@@ -69,11 +75,17 @@ def train_model(model, train_loader, val_loader, device, model_name, output_dir,
         # Training
         model.train()
         train_loss = 0
-        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} ({model_name})"):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            if model_name.lower() == 'inception' and model.training:
+                outputs, aux_outputs = model(images)
+                loss1 = criterion(outputs, labels)
+                loss2 = criterion(aux_outputs, labels)
+                loss = loss1 + 0.4 * loss2  # Combine main and auxiliary loss
+            else:
+                outputs = model(images)
+                loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -92,7 +104,7 @@ def train_model(model, train_loader, val_loader, device, model_name, output_dir,
             val_loss /= len(val_loader)
             val_losses.append(val_loss)
 
-        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        print(f"Epoch {epoch+1}/{epochs} ({model_name}) - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         scheduler.step()
 
         # Save best model
@@ -150,8 +162,10 @@ def evaluate_model(model, test_loader, device, model_name, output_dir, class_nam
 
 # Main function
 def main():
-    parser = argparse.ArgumentParser(description="Train VGG or ResNet on defect dataset")
+    parser = argparse.ArgumentParser(description="Train VGG, ResNet, or Inception on defect dataset")
     parser.add_argument('--dataset_folder', type=str, default='noaug', help='Path to dataset folder')
+    parser.add_argument('--models', type=str, default='all', choices=['vgg', 'resnet', 'inception', 'all'],
+                        help='Model(s) to train: vgg, resnet, inception, or all')
     args = parser.parse_args()
 
     dataset_folder = args.dataset_folder
@@ -163,52 +177,52 @@ def main():
     # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Data transforms
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    # Load datasets
-    train_dataset = DefectDataset(
-        os.path.join(dataset_folder, 'train'),
-        os.path.join(dataset_folder, 'annotations', 'train.json'),
-        transform=transform
-    )
-    val_dataset = DefectDataset(
-        os.path.join(dataset_folder, 'val'),
-        os.path.join(dataset_folder, 'annotations', 'val.json'),
-        transform=transform
-    )
-    test_dataset = DefectDataset(
-        os.path.join(dataset_folder, 'test'),
-        os.path.join(dataset_folder, 'annotations', 'test.json'),
-        transform=transform
-    )
-
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32)
-    test_loader = DataLoader(test_dataset, batch_size=32)
-
     # Class names (7 classes, ignoring 'platelet')
     class_names = ['ba', 'eo', 'erb', 'ig', 'lym', 'mono', 'neut']
 
-    # Train and evaluate VGG
-    vgg_output_dir = os.path.join(output_dir, 'vgg')
-    os.makedirs(vgg_output_dir, exist_ok=True)
-    vgg_model = initialize_model('vgg', num_classes=7).to(device)
-    train_losses, val_losses = train_model(vgg_model, train_loader, val_loader, device, 'vgg', vgg_output_dir)
-    accuracy, precision, recall, f1 = evaluate_model(vgg_model, test_loader, device, 'vgg', vgg_output_dir, class_names)
-    print(f"VGG - Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+    # Models to train
+    model_list = ['vgg', 'resnet', 'inception'] if args.models == 'all' else [args.models]
 
-    # Train and evaluate ResNet
-    resnet_output_dir = os.path.join(output_dir, 'resnet')
-    os.makedirs(resnet_output_dir, exist_ok=True)
-    resnet_model = initialize_model('resnet', num_classes=7).to(device)
-    train_losses, val_losses = train_model(resnet_model, train_loader, val_loader, device, 'resnet', resnet_output_dir)
-    accuracy, precision, recall, f1 = evaluate_model(resnet_model, test_loader, device, 'resnet', resnet_output_dir, class_names)
-    print(f"ResNet - Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+    for model_name in model_list:
+        # Model-specific input size
+        model, input_size = initialize_model(model_name, num_classes=7)
+        # input_size = 64
+        model = model.to(device)
+
+        # Data transforms
+        transform = transforms.Compose([
+            transforms.Resize((input_size, input_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+        # Load datasets
+        train_dataset = DefectDataset(
+            os.path.join(dataset_folder, 'train'),
+            os.path.join(dataset_folder, 'annotations', 'train.json'),
+            transform=transform
+        )
+        val_dataset = DefectDataset(
+            os.path.join(dataset_folder, 'val'),
+            os.path.join(dataset_folder, 'annotations', 'val.json'),
+            transform=transform
+        )
+        test_dataset = DefectDataset(
+            os.path.join(dataset_folder, 'test'),
+            os.path.join(dataset_folder, 'annotations', 'test.json'),
+            transform=transform
+        )
+
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=32)
+        test_loader = DataLoader(test_dataset, batch_size=32)
+
+        # Train and evaluate
+        model_output_dir = os.path.join(output_dir, model_name)
+        os.makedirs(model_output_dir, exist_ok=True)
+        train_losses, val_losses = train_model(model, train_loader, val_loader, device, model_name, model_output_dir, input_size)
+        accuracy, precision, recall, f1 = evaluate_model(model, test_loader, device, model_name, model_output_dir, class_names)
+        print(f"{model_name.capitalize()} - Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
 if __name__ == '__main__':
     main()
