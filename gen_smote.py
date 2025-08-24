@@ -25,7 +25,7 @@ args = {
     'lambda': 0.01,       # Discriminator loss weight
     'lr': 0.0002,         # Learning rate
     'epochs': 50,         # Number of training epochs
-    'batch_size': 200,    # Batch size
+    'batch_size': 100,    # Batch size
     'save': True,         # Save model weights
     'train': True,        # Train the model
     'dataset': 'custom',  # Custom dataset
@@ -146,7 +146,7 @@ def load_images_and_labels(json_path, img_dir):
     img_data = []
     
     transform = transforms.Compose([
-        transforms.Resize((args['image_size'], args['image_size'])),  # Updated to 128x128
+        transforms.Resize((args['image_size'], args['image_size'])),
         transforms.ToTensor(),
         transforms.Normalize((0.5,) * args['n_channel'], (0.5,) * args['n_channel'])
     ])
@@ -264,11 +264,13 @@ if args['train']:
     # Plot and save loss
     plot_and_save_loss(loss_history, os.path.join(dst_root, 'loss_plot.png'))
 
-# Load best models for generation
+# Load best models for generation (move to CPU for image generation)
 encoder.load_state_dict(torch.load(os.path.join(dst_root, 'bst_enc.pth')))
 decoder.load_state_dict(torch.load(os.path.join(dst_root, 'bst_dec.pth')))
 encoder.eval()
 decoder.eval()
+encoder = encoder.to('cpu')  # Move to CPU
+decoder = decoder.to('cpu')  # Move to CPU
 
 # Balance the dataset
 class_counts = collections.Counter(dec_y)
@@ -289,11 +291,11 @@ for cls in categories.keys():
         continue
     print(f'Generating {n_to_sample} samples for class {categories[cls]}')
     
-    xclass_t = torch.Tensor(xclass).to(device)
+    xclass_t = torch.Tensor(xclass).to('cpu')  # Explicitly use CPU
     xclass_enc = encoder(xclass_t).detach().cpu().numpy()
     xsamp, ysamp = G_SM(xclass_enc, yclass, n_to_sample, cls)
     
-    xsamp_t = torch.Tensor(xsamp).to(device)
+    xsamp_t = torch.Tensor(xsamp).to('cpu')  # Explicitly use CPU
     ximg = decoder(xsamp_t).detach().cpu()
     
     transform_inv = transforms.Normalize((-1,) * args['n_channel'], (2,) * args['n_channel'])

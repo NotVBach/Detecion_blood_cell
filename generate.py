@@ -264,7 +264,7 @@ for cat_id, num_to_gen in to_generate.items():
     class_name = cat_id_to_name[cat_id]
     generator = Generator(latent_dim=latent_dim).to(device)
     discriminator = Discriminator().to(device)
-    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=150, latent_dim=latent_dim, device=device)
+    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=200, latent_dim=latent_dim, device=device)
 
     # Generate synthetic images
     fake_imgs = generate_images(generator, num_to_gen, latent_dim=latent_dim, device=device)
