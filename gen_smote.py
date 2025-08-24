@@ -10,6 +10,7 @@ import json
 import shutil
 from PIL import Image
 import torchvision.transforms as transforms
+import matplotlib.pyplot as plt  # Added for plotting
 
 print(torch.version.cuda)
 
@@ -60,7 +61,7 @@ class Encoder(nn.Module):
         x = self.fc(x)
         return x
 
-# Define Decoder (Fixed to output 64x64)
+# Define Decoder
 class Decoder(nn.Module):
     def __init__(self, args):
         super(Decoder, self).__init__()
@@ -169,6 +170,18 @@ def load_images_and_labels(json_path, img_dir):
     labels = np.array(labels)
     return img_data, labels, img_id_to_name, categories
 
+# Plot and save loss
+def plot_and_save_loss(loss_history, save_path):
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, len(loss_history) + 1), loss_history, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(save_path)
+    plt.close()
+
 # Main execution
 src_root = 'noaug'
 dst_root = 'aug_smote'
@@ -197,6 +210,8 @@ if args['train']:
                               batch_size=args['batch_size'], shuffle=True)
     
     best_loss = np.inf
+    loss_history = []  # Store loss for each epoch
+    
     for epoch in range(args['epochs']):
         encoder.train()
         decoder.train()
@@ -232,12 +247,22 @@ if args['train']:
             train_loss += comb_loss.item() * images.size(0)
         
         train_loss /= len(train_loader.dataset)
-        print(f'Epoch: {epoch} \tTrain Loss: {train_loss:.6f}')
+        loss_history.append(train_loss)  # Record loss
+        print(f'Epoch: {epoch + 1} \tTrain Loss: {train_loss:.6f}')
         
         if train_loss < best_loss and args['save']:
             torch.save(encoder.state_dict(), os.path.join(dst_root, 'bst_enc.pth'))
             torch.save(decoder.state_dict(), os.path.join(dst_root, 'bst_dec.pth'))
             best_loss = train_loss
+    
+    # Save loss history to file
+    loss_file = os.path.join(dst_root, 'loss_history.txt')
+    with open(loss_file, 'w') as f:
+        for epoch, loss in enumerate(loss_history, 1):
+            f.write(f'Epoch {epoch}: {loss:.6f}\n')
+    
+    # Plot and save loss
+    plot_and_save_loss(loss_history, os.path.join(dst_root, 'loss_plot.png'))
 
 # Load best models for generation
 encoder.load_state_dict(torch.load(os.path.join(dst_root, 'bst_enc.pth')))
