@@ -18,7 +18,7 @@ np.random.seed(42)
 
 # Paths
 base_dir = 'noaug'
-aug_dir = 'aug'
+aug_dir = 'aug_gan'
 train_json = os.path.join(base_dir, 'annotations', 'train.json')
 val_json = os.path.join(base_dir, 'annotations', 'val.json')
 test_json = os.path.join(base_dir, 'annotations', 'test.json')
@@ -85,7 +85,7 @@ class DefectDataset(Dataset):
 
 # Image transformations
 transform = transforms.Compose([
-    transforms.Resize((64, 64)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize([0.5], [0.5])
 ])
@@ -95,19 +95,22 @@ class Generator(nn.Module):
     def __init__(self, latent_dim=100, feature_maps=64, channels=3):
         super(Generator, self).__init__()
         self.main = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, feature_maps * 8, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(latent_dim, feature_maps * 8, 7, 1, 0, bias=False),  # Output: 7x7
             nn.BatchNorm2d(feature_maps * 8),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps * 8, feature_maps * 4, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(feature_maps * 8, feature_maps * 4, 4, 2, 1, bias=False),  # Output: 14x14
             nn.BatchNorm2d(feature_maps * 4),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps * 4, feature_maps * 2, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(feature_maps * 4, feature_maps * 2, 4, 2, 1, bias=False),  # Output: 28x28
             nn.BatchNorm2d(feature_maps * 2),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps * 2, feature_maps, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(feature_maps * 2, feature_maps, 4, 2, 1, bias=False),  # Output: 56x56
             nn.BatchNorm2d(feature_maps),
             nn.ReLU(True),
-            nn.ConvTranspose2d(feature_maps, channels, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(feature_maps, feature_maps // 2, 4, 2, 1, bias=False),  # Output: 112x112
+            nn.BatchNorm2d(feature_maps // 2),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(feature_maps // 2, channels, 4, 2, 1, bias=False),  # Output: 224x224
             nn.Tanh()
         )
 
@@ -119,18 +122,21 @@ class Discriminator(nn.Module):
     def __init__(self, feature_maps=64, channels=3):
         super(Discriminator, self).__init__()
         self.main = nn.Sequential(
-            nn.Conv2d(channels, feature_maps, 4, 2, 1, bias=False),
+            nn.Conv2d(channels, feature_maps, 4, 2, 1, bias=False),  # Output: 112x112
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps, feature_maps * 2, 4, 2, 1, bias=False),
+            nn.Conv2d(feature_maps, feature_maps * 2, 4, 2, 1, bias=False),  # Output: 56x56
             nn.BatchNorm2d(feature_maps * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 2, feature_maps * 4, 4, 2, 1, bias=False),
+            nn.Conv2d(feature_maps * 2, feature_maps * 4, 4, 2, 1, bias=False),  # Output: 28x28
             nn.BatchNorm2d(feature_maps * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 4, feature_maps * 8, 4, 2, 1, bias=False),
+            nn.Conv2d(feature_maps * 4, feature_maps * 8, 4, 2, 1, bias=False),  # Output: 14x14
             nn.BatchNorm2d(feature_maps * 8),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(feature_maps * 8, 1, 4, 1, 0, bias=False),
+            nn.Conv2d(feature_maps * 8, feature_maps * 16, 4, 2, 1, bias=False),  # Output: 7x7
+            nn.BatchNorm2d(feature_maps * 16),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(feature_maps * 16, 1, 7, 1, 0, bias=False),  # Output: 1x1
             nn.Sigmoid()
         )
 
@@ -258,7 +264,7 @@ for cat_id, num_to_gen in to_generate.items():
     class_name = cat_id_to_name[cat_id]
     generator = Generator(latent_dim=latent_dim).to(device)
     discriminator = Discriminator().to(device)
-    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=150, latent_dim=latent_dim, device=device)
+    generator = train_dcgan(generator, discriminator, dataloader, class_name, num_epochs=300, latent_dim=latent_dim, device=device)
 
     # Generate synthetic images
     fake_imgs = generate_images(generator, num_to_gen, latent_dim=latent_dim, device=device)
@@ -274,8 +280,8 @@ for cat_id, num_to_gen in to_generate.items():
         # Update images list
         new_images.append({
             'file_name': img_name,
-            'height': 64,
-            'width': 64,
+            'height': 224,
+            'width': 224,
             'id': max_image_id
         })
 

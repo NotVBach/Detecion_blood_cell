@@ -10,7 +10,7 @@ import json
 import shutil
 from PIL import Image
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt  # Added for plotting
+import matplotlib.pyplot as plt
 
 print(torch.version.cuda)
 
@@ -24,12 +24,12 @@ args = {
     'sigma': 1.0,         # Variance in latent space
     'lambda': 0.01,       # Discriminator loss weight
     'lr': 0.0002,         # Learning rate
-    'epochs': 50,         # Number of training epochs
-    'batch_size': 100,    # Batch size
+    'epochs': 300,         # Number of training epochs
+    'batch_size': 32,     # Reduced batch size for 224x224 images
     'save': True,         # Save model weights
     'train': True,        # Train the model
     'dataset': 'custom',  # Custom dataset
-    'image_size': 64      # Target image size for resizing
+    'image_size': 224     # Target image size for resizing (changed to 224)
 }
 
 # Define Encoder
@@ -41,19 +41,22 @@ class Encoder(nn.Module):
         self.n_z = args['n_z']
         
         self.conv = nn.Sequential(
-            nn.Conv2d(self.n_channel, self.dim_h, 4, 2, 1, bias=False),
+            nn.Conv2d(self.n_channel, self.dim_h, 4, 2, 1, bias=False),      # 224x224 -> 112x112
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h, self.dim_h * 2, 4, 2, 1, bias=False),
+            nn.Conv2d(self.dim_h, self.dim_h * 2, 4, 2, 1, bias=False),      # 112x112 -> 56x56
             nn.BatchNorm2d(self.dim_h * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h * 2, self.dim_h * 4, 4, 2, 1, bias=False),
+            nn.Conv2d(self.dim_h * 2, self.dim_h * 4, 4, 2, 1, bias=False),  # 56x56 -> 28x28
             nn.BatchNorm2d(self.dim_h * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.dim_h * 4, self.dim_h * 8, 4, 2, 1, bias=False),
+            nn.Conv2d(self.dim_h * 4, self.dim_h * 8, 4, 2, 1, bias=False),  # 28x28 -> 14x14
+            nn.BatchNorm2d(self.dim_h * 8),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(self.dim_h * 8, self.dim_h * 8, 4, 2, 1, bias=False),  # 14x14 -> 7x7
             nn.BatchNorm2d(self.dim_h * 8),
             nn.LeakyReLU(0.2, inplace=True)
         )
-        self.fc = nn.Linear(self.dim_h * 8 * 4 * 4, self.n_z)  # For 64x64 input
+        self.fc = nn.Linear(self.dim_h * 8 * 7 * 7, self.n_z)  # For 224x224 input
 
     def forward(self, x):
         x = self.conv(x)
@@ -70,26 +73,29 @@ class Decoder(nn.Module):
         self.n_z = args['n_z']
         
         self.fc = nn.Sequential(
-            nn.Linear(self.n_z, self.dim_h * 8 * 4 * 4),  # Start with 4x4 feature map
+            nn.Linear(self.n_z, self.dim_h * 8 * 7 * 7),  # Start with 7x7 feature map
             nn.ReLU()
         )
         self.deconv = nn.Sequential(
-            nn.ConvTranspose2d(self.dim_h * 8, self.dim_h * 4, 4, 2, 1, bias=False),  # 4x4 -> 8x8
+            nn.ConvTranspose2d(self.dim_h * 8, self.dim_h * 8, 4, 2, 1, bias=False),  # 7x7 -> 14x14
+            nn.BatchNorm2d(self.dim_h * 8),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(self.dim_h * 8, self.dim_h * 4, 4, 2, 1, bias=False),  # 14x14 -> 28x28
             nn.BatchNorm2d(self.dim_h * 4),
             nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h * 4, self.dim_h * 2, 4, 2, 1, bias=False),  # 8x8 -> 16x16
+            nn.ConvTranspose2d(self.dim_h * 4, self.dim_h * 2, 4, 2, 1, bias=False),  # 28x28 -> 56x56
             nn.BatchNorm2d(self.dim_h * 2),
             nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h * 2, self.dim_h, 4, 2, 1, bias=False),     # 16x16 -> 32x32
+            nn.ConvTranspose2d(self.dim_h * 2, self.dim_h, 4, 2, 1, bias=False),     # 56x56 -> 112x112
             nn.BatchNorm2d(self.dim_h),
             nn.ReLU(True),
-            nn.ConvTranspose2d(self.dim_h, self.n_channel, 4, 2, 1, bias=False),     # 32x32 -> 64x64
+            nn.ConvTranspose2d(self.dim_h, self.n_channel, 4, 2, 1, bias=False),     # 112x112 -> 224x224
             nn.Tanh()
         )
 
     def forward(self, x):
         x = self.fc(x)
-        x = x.view(-1, self.dim_h * 8, 4, 4)  # Reshape to 4x4 feature map
+        x = x.view(-1, self.dim_h * 8, 7, 7)  # Reshape to 7x7 feature map
         x = self.deconv(x)
         return x
 
@@ -146,7 +152,7 @@ def load_images_and_labels(json_path, img_dir):
     img_data = []
     
     transform = transforms.Compose([
-        transforms.Resize((args['image_size'], args['image_size'])),
+        transforms.Resize((args['image_size'], args['image_size'])),  # Updated to 224x224
         transforms.ToTensor(),
         transforms.Normalize((0.5,) * args['n_channel'], (0.5,) * args['n_channel'])
     ])
@@ -247,7 +253,7 @@ if args['train']:
             train_loss += comb_loss.item() * images.size(0)
         
         train_loss /= len(train_loader.dataset)
-        loss_history.append(train_loss)  # Record loss
+        loss_history.append(train_loss)
         print(f'Epoch: {epoch + 1} \tTrain Loss: {train_loss:.6f}')
         
         if train_loss < best_loss and args['save']:
